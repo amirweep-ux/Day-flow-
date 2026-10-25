@@ -1,39 +1,93 @@
-name: Build Day Flow APK
+const fs = require('fs');
+const path = require('path');
+const cp = require('child_process');
 
-on:
-  workflow_dispatch:
-  push:
-    branches: [main]
+const root = __dirname;
+const www = path.join(root, 'www');
 
-jobs:
-  apk:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+fs.rmSync(www, { recursive: true, force: true });
+fs.mkdirSync(path.join(www, 'fonts'), { recursive: true });
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
+cp.execSync(
+  'npx tailwindcss -i ./tw.css -o ./www/tailwind.css --content "./index.html" --minify',
+  { stdio: 'inherit', cwd: root }
+);
 
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 21
+const fdir = path.join(
+  root,
+  'node_modules/@fontsource/vazirmatn/files'
+);
 
-      - run: npm install
-      - run: npm run build
-      - run: npx cap add android
+let css = '';
 
-      - name: Android permissions for reminders
-        run: |
-          sed -i 's#<application#<uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>\n    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>\n    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>\n    <application#' android/app/src/main/AndroidManifest.xml
+for (const w of [400, 500, 700, 900]) {
+  const f = fs.readdirSync(fdir).find(n =>
+    new RegExp(
+      '^vazirmatn-arabic-' + w + '-normal\\.woff2$'
+    ).test(n)
+  );
 
-      - run: npx @capacitor/assets generate --android
-      - run: npx cap sync android
-      - run: cd android && chmod +x gradlew && ./gradlew assembleDebug
+  if (!f) {
+    console.warn('Font file missing for weight', w);
+    continue;
+  }
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dayflow-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
-          
+  fs.copyFileSync(
+    path.join(fdir, f),
+    path.join(www, 'fonts', f)
+  );
+
+  css +=
+    "@font-face{font-family:'Vazirmatn';font-weight:" +
+    w +
+    ';font-style:normal;font-display:swap;src:url(fonts/' +
+    f +
+    ") format('woff2')}\n";
+}
+
+fs.writeFileSync(path.join(www, 'fonts.css'), css);
+
+fs.copyFileSync(
+  path.join(
+    root,
+    'node_modules/@supabase/supabase-js/dist/umd/supabase.js'
+  ),
+  path.join(www, 'supabase.js')
+);
+
+let html = fs.readFileSync(
+  path.join(root, 'index.html'),
+  'utf8'
+);
+
+html = html
+  .replace(
+    /<script[^>]*src="https:\/\/cdn\.tailwindcss\.com[^"]*"[^>]*><\/script>/,
+    '<link rel="stylesheet" href="tailwind.css">'
+  )
+  .replace(
+    /<script[^>]*src="https:\/\/cdn\.jsdelivr\.net\/npm\/@supabase[^"]*"[^>]*><\/script>/,
+    '<script src="supabase.js"></script>'
+  )
+  .replace(/<link rel="preconnect"[^>]*>\s*/g, '')
+  .replace(
+    /<link href="https:\/\/fonts\.googleapis\.com[^>]*>/,
+    '<link rel="stylesheet" href="fonts.css">'
+  );
+
+fs.writeFileSync(path.join(www, 'index.html'), html);
+
+for (const f of [
+  'manifest.json',
+  'icon-192.png',
+  'icon-512.png',
+  'icon-maskable-512.png',
+  'sw.js'
+]) {
+  fs.copyFileSync(
+    path.join(root, f),
+    path.join(www, f)
+  );
+}
+
+console.log('www ready');
